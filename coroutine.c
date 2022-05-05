@@ -4,8 +4,9 @@
 
 #define STACK_SIZE 4096 * 1024
 
-static inline void stack_switch_call(void *csp, void *entry, uintptr_t arg);
-static void co_yield_impl_switch();
+static __attribute__ ((noinline)) void stack_switch_call(void *csp, Func entry, void *arg);
+static __attribute__ ((noinline)) void co_yield_noinlne();
+static void __attribute__ ((noinline)) co_yield_impl_switch();
 
 enum co_status {
     CO_NEW = 1, // 新创建，还未执行过
@@ -20,7 +21,7 @@ struct co {
     void *ret;
 
     struct co* waiters;
-    enum    co_status status;
+    enum co_status status;
     struct  regs regs;
     uint8_t* stack;
 };
@@ -29,6 +30,7 @@ static struct co *current = NULL;
 struct co *co_start(const char *name, Func func, void *arg) {
     if (current == NULL) {
         current = (struct co*)malloc(sizeof(struct co));
+        current->name = "main";
         current->status = CO_RUNNING;
         current->waiters = current; // 成环
     }
@@ -56,55 +58,63 @@ void* co_wait(struct co *co) {
     return co->ret;
 }
 
-void co_yield() {
+static __attribute__ ((noinline)) void co_yield_noinlne() {
+    // 进入等待状态, 注意不要让死人复活(手动狗头)
+    if (current->status != CO_DEAD) current->status = CO_WAITING;
     // save registers
 #if __x86_64__ 
-    asm volatile ("mov %rbp, %rsp");
-    asm volatile ("pop %0" :"=r"(current->regs.rbp));
-    asm volatile ("pop %0" :"=r"(current->regs.rip));
     REGS_SAVE(current->regs, rbx);
     REGS_SAVE(current->regs, rsp);
+    REGS_SAVE(current->regs, rbp);
     REGS_SAVE(current->regs, r12);
     REGS_SAVE(current->regs, r13);
     REGS_SAVE(current->regs, r14);
     REGS_SAVE(current->regs, r15);
-    asm volatile ("push %0" ::"r"(current->regs.rip));
-    asm volatile ("push %0" ::"r"(current->regs.rbp));
+    asm volatile (
+        "jmp .save_ip_to_stack\n .load_ip_to_regs:\n pop %0" 
+        :"=r"(current->regs.rip)
+    );
 #else
-    asm volatile ("mov %ebp, %esp");
-    asm volatile ("pop %0" :"=r"(current->regs.ebp));
-    asm volatile ("pop %0" :"=r"(current->regs.eip));
     REGS_SAVE(current->regs, ebx);
+    REGS_SAVE(current->regs, edi);
+    REGS_SAVE(current->regs, esi);
+    REGS_SAVE(current->regs, ebp);
     REGS_SAVE(current->regs, esp);
-    asm volatile ("push %0" ::"r"(current->regs.eip));
-    asm volatile ("push %0" ::"r"(current->regs.ebp));
+    asm volatile (
+        "jmp .save_ip_to_stack\n .load_ip_to_regs:\n pop %0" 
+        :"=r"(current->regs.eip)
+    );
 #endif
     co_yield_impl_switch();
+    asm volatile ("jmp .yeild_return");
+
+    asm volatile (
+        ".save_ip_to_stack:\n call .load_ip_to_regs\n .yeild_return:\n" 
+        :   :   :   "memory"
+    );
+
+    return ;
 }
 
-static inline void stack_switch_call(void *csp, void *entry, uintptr_t arg) {
-#if __x86_64__
-    asm volatile ("movq %0, %%rsp\n movq %2, %%rdi\n call *%1"
-      : : "r"((uintptr_t)csp), "d"(entry), "r"(arg) : "memory");
-    
-    uintptr_t ret;
-    REG_SAVE(rax, ret);
-    current->ret = (void *)ret;
-#else
-    asm volatile ("movl %0, %%esp\n movl %2, 4(%0)\n call *%1"
-      : : "r"((uintptr_t)csp - 8), "d"(entry), "r"(arg) : "memory");
+void co_yield() {
+    co_yield_noinlne();
+}
 
-    uintptr_t ret;
-    REG_SAVE(eax, ret);
-    current->ret = (void *)ret;
+static __attribute__ ((noinline)) void stack_switch_call(void *csp, Func entry, void* arg) {
+#if __x86_64__
+    asm volatile ("movq %0, %%rsp\n" ::"r"((uintptr_t)csp));
+    void *ret = entry(arg);
+    current->ret = ret;
+#else
+    asm volatile ("movl %0, %%esp\n" ::"r"((uintptr_t)csp));
+    void *ret = entry(arg);
+    current->ret = ret;
 #endif
     current->status = CO_DEAD;
     co_yield();
 }
 
-static void co_yield_impl_switch() {
-    // 进入等待状态, 注意不要让死人复活(手动狗头)
-    if (current->status != CO_DEAD) current->status = CO_WAITING;
+static __attribute__ ((noinline)) void co_yield_impl_switch() {
     // 在循环队列里面搜索处于 CO_WAITING 状态的任务
     do {
         current = current->waiters;
@@ -113,27 +123,32 @@ static void co_yield_impl_switch() {
     switch (current->status)
     {
     case CO_NEW:
-        stack_switch_call(current->stack, current->func, (uintptr_t) current->arg);
+        current->status = CO_RUNNING;
+        stack_switch_call(current->stack, current->func, current->arg);
         break;
     case CO_WAITING:
         current->status = CO_RUNNING;
         // 保存寄存器
 #if __x86_64__
-        REGS_LOAD(current->regs, rbx);
         REGS_LOAD(current->regs, rsp);
         REGS_LOAD(current->regs, r12);
         REGS_LOAD(current->regs, r13);
         REGS_LOAD(current->regs, r14);
         REGS_LOAD(current->regs, r15);
         REGS_LOAD(current->regs, rbp);
-        REG_LOAD(rax, current->regs.rip);
-        asm volatile ("jmp *%rax");
+        REG_LOAD(rcx, current->regs.rip);
+        asm volatile ("push %rcx");
+        REGS_LOAD(current->regs, rbx);
+        asm volatile ("ret");
 #else
-        REGS_LOAD(current->regs, ebx);
         REGS_LOAD(current->regs, esp);
         REGS_LOAD(current->regs, ebp);
-        REG_LOAD(eax, current->regs.eip);
-        asm volatile ("jmp *%eax");
+        REGS_LOAD(current->regs, edi);
+        REGS_LOAD(current->regs, esi);
+        REG_LOAD(ecx, current->regs.eip);
+        asm volatile ("push %ecx");
+        REGS_LOAD(current->regs, ebx);
+        asm volatile ("ret");
 #endif
         break;
     default:
