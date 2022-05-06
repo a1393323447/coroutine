@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "threads.h": "c",
+        "coroutine.h": "c",
+        "stdlib.h": "c"
+    }
+}

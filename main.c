@@ -12,11 +12,11 @@ void* test(void* arg) {
 }
 
 int main() {
-    struct co* task1 = co_start("task 1", test, (void*)1);
-    struct co* task2 = co_start("task 2", test, (void*)2);
+    struct co* task1 = co_start(test, (void*)1);
+    struct co* task2 = co_start(test, (void*)2);
     
-    int task1_ret = (int)co_wait(task1);
-    int task2_ret = (int)co_wait(task2);
+    int task1_ret = (int)co_wait(&task1);
+    int task2_ret = (int)co_wait(&task2);
 
     printf("task1_ret = %d\n", task1_ret);
     printf("task2_ret = %d\n", task2_ret);

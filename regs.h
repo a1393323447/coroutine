@@ -13,6 +13,8 @@ struct regs {
     // callee-saved
     volatile uint64_t rbx;
     volatile uint64_t rbp;
+    volatile uint64_t rdi;
+    volatile uint64_t rsi;
     volatile uint64_t r12;
     volatile uint64_t r13;
     volatile uint64_t r14;
