@@ -1,6 +1,37 @@
 #include <stdlib.h>
+#include <stdint.h>
 #include "coroutine.h"
-#include "regs.h"
+
+#define REG_SAVE(REG, VAL) asm volatile ("mov %%" #REG ", %0" :"=r"(VAL) :: "memory")
+#define REG_LOAD(REG, VAL) asm volatile ("mov %0, %%" #REG    ::"r"(VAL)  : "memory")
+
+#define REGS_SAVE(REGS, REG) REG_SAVE(REG, REGS.REG)
+#define REGS_LOAD(REGS, REG) REG_LOAD(REG, REGS.REG)
+
+struct regs {
+#if __x86_64__
+    volatile uint64_t rsp;
+    volatile uint64_t rip;
+    // callee-saved
+    volatile uint64_t rbx;
+    volatile uint64_t rbp;
+    volatile uint64_t rdi;
+    volatile uint64_t rsi;
+    volatile uint64_t r12;
+    volatile uint64_t r13;
+    volatile uint64_t r14;
+    volatile uint64_t r15;
+#else
+    volatile uint32_t esp;
+    volatile uint32_t eip;
+    // callee-saved
+    volatile uint32_t ebx;
+    volatile uint32_t edi;
+    volatile uint32_t esi;
+    volatile uint32_t ebp;
+#endif
+};
+
 
 #define STACK_SIZE 4096 * 1024
 
@@ -53,38 +84,6 @@ struct co *co_start(Func func, void *arg) {
     co_yield();
 
     return coroutine;
-}
-
-void* co_wait(struct co **p_co) {
-    struct co* co = *p_co;
-    while (co->status != CO_DEAD) {
-        co_yield();
-    }
-    void *ret = co->ret;
-
-    // 释放内存
-    // 找出当前协程在任务队列里的位置(找出它的前继)
-    struct co* worker = current;
-    const struct co* start = worker;
-    while (worker->waiters->cid != co->cid) {
-        worker = worker->waiters;
-        if (worker->cid == start->cid) {
-            perror("Failed to wait coroutine.\n");
-            exit(-1);
-        }
-    }
-    // 将当前协程踢出任务队列
-    worker->waiters = co->waiters;
-    // 还原栈指针
-    co->stack -= STACK_SIZE - 1;
-    // 释放栈空间
-    free(co->stack);
-    // 释放 co
-    free(co);
-    // 将已经 wait 的 coroutine 置为 NULL
-    *p_co = NULL;
-
-    return ret;
 }
 
 static __attribute__ ((noinline)) void co_yield_noinlne() {
@@ -187,4 +186,39 @@ static __attribute__ ((noinline)) void co_yield_impl_switch() {
     default:
         break;
     }
+}
+
+void  co_cancel(struct co* *p_co) {
+    struct co* co = *p_co;
+    struct co* worker = current;
+    const struct co* start = worker;
+    while (worker->waiters->cid != co->cid) {
+        worker = worker->waiters;
+        if (worker->cid == start->cid) {
+            perror("Failed to wait coroutine.\n");
+            exit(-1);
+        }
+    }
+    // 将当前协程踢出任务队列
+    worker->waiters = co->waiters;
+    // 还原栈指针
+    co->stack -= STACK_SIZE - 1;
+    // 释放栈空间
+    free(co->stack);
+    // 释放 co
+    free(co);
+    // 将已经 wait 的 coroutine 置为 NULL
+    *p_co = NULL;
+}
+
+void* co_wait(struct co **p_co) {
+    struct co* co = *p_co;
+    while (co->status != CO_DEAD) {
+        co_yield();
+    }
+    void *ret = co->ret;
+
+    co_cancel(p_co);
+
+    return ret;
 }
