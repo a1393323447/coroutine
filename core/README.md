@@ -1,7 +1,7 @@
-# Coroutine
-协程 (`Coroutine`) 是由应用程序调度的用户态线程, 是一种绿色线程 (`Green Thread`) 。使用协程可以实现单线程的异步。这个仓库实现了 `x86` (包含 `32` 位和 `64` 位) 平台的协程。可在 `GCC 11.2` 及以下的 `GCC` 编译器上编译。
+# `core`
+## 简介
+`core` 模块提供了 `Coroutine` 的核心实现, 以及对协程的配置。
 
-# 简介
 ## 函数类型
 为了能够适配多种函数, 本库调度的协程函数声明应为:
 
@@ -64,9 +64,45 @@ co_cancel(foo_routine);
 // foo_routine 被销毁, 不会再被调度
 ```
 
-## 项目结构
-本库有多个模块, 每个模块都是一个目录, 目录中的 `README` 文件是模块的文档。
-本库的根目录下的 `predule.h` 中是各种常用头文件的导入。更详细的信息请参考模块目录下的文档。
+## 获得协程默认栈大小
+可以通过函数 `co_get_default_stack_size` 获得创建协程时默认分配的栈空间大小。
+本库初始默认栈大小为 `4 Mb` 。
 
-# 示例代码
-`example` 目录下是各种示例代码。
+```c
+size_t default_stack_size = co_get_default_stack_size();
+assert(default_stack_size == 4 * 1024 * 1024);
+```
+
+## 设置默认协程栈大小
+可以通过函数 `co_set_default_stack_size` 设置协程的默认栈大小, 设置完成后, 再通过 `co_start` 创建
+的协程的栈空间大小就是设置的值。
+
+```c
+size_t default_stack_size = co_get_default_stack_size();
+assert(default_stack_size == 4 * 1024 * 1024);
+
+co_set_default_stack_size(8 * 1024 * 1024);
+
+size_t new_stack_size = co_get_default_stack_size();
+assert(new_stack_size == 8 * 1024 * 1024);
+```
+
+## 获得当前协程栈大小
+可以通过函数 `co_get_stack_size` 获取当前协程的栈大小。
+
+```c
+size_t default_stack_size = co_get_default_stack_size();
+assert(default_stack_size == 4 * 1024 * 1024);
+
+Coroutine foo_routine = co_start(foo, NULL);
+size_t foo_stack_size = co_get_default_stack_size();
+assert(foo_stack_size == 4 * 1024 * 1024);
+
+co_set_default_stack_size(8 * 1024 * 1024);
+size_t new_stack_size = co_get_default_stack_size();
+assert(new_stack_size == 8 * 1024 * 1024);
+
+Coroutine bar_routine = co_start(bar, NULL);
+size_t bar_stack_size = co_get_default_stack_size();
+assert(bar_stack_size == 8 * 1024 * 1024);
+```

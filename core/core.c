@@ -26,7 +26,7 @@ _Thread_local
 #else
 static
 #endif
-size_t stack_size = 4096 * 1024;
+size_t stack_size = 4 * 1024 * 1024;
 
 Coroutine co_start(Func func, void *arg) {
     if (current == NULL) {
@@ -96,11 +96,11 @@ void* co_wait(Coroutine *p_co) {
     return ret;
 }
 
-void co_set_defualt_stack_size(size_t size) {
+void co_set_default_stack_size(size_t size) {
     stack_size = size;
 }
 
-size_t co_get_defualt_stack_size() {
+size_t co_get_default_stack_size() {
     return stack_size;
 }
 

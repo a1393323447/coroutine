@@ -37,8 +37,8 @@ void      co_cancel(Coroutine *p_co);
 void*     co_wait(Coroutine *p_co);
 void      co_yield();
 
-void   co_set_defualt_stack_size(size_t size);
-size_t co_get_defualt_stack_size();
+void   co_set_default_stack_size(size_t size);
+size_t co_get_default_stack_size();
 size_t co_get_stack_size(Coroutine co);
 
 #endif // __COROUTINE_CORE_H__
