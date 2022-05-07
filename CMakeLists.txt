@@ -1,12 +1,12 @@
+PROJECT(coroutine)
 cmake_minimum_required(VERSION 3.20)
-project(coroutine C)
+set(CMAKE_C_STANDARD 99)
 
-set(CMAKE_C_STANDARD 11)
+add_library(coroutine STATIC
+        predule.h
+    core/core.h core/core.c
+    core/regs.h
+    pipe/pipe.h
+    sync/comutex.h sync/comutex.c sync/corwlock.h sync/corwlock.c sync/sync.h)
 
-include_directories(.)
-
-add_executable(coroutine
-        coroutine.c
-        coroutine.h
-        main.c
-        regs.h)
+add_subdirectory(example)
