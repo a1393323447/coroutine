@@ -4,9 +4,10 @@
 
 #include "core.h"
 #include <stdlib.h>
+#include <stdio.h>
 
-static __attribute__ ((noinline)) void stack_switch_call(void *csp, Func entry, void *arg);
-static __attribute__ ((noinline)) void co_yield_noinlne();
+static __attribute__ ((noinline)) void stack_switch_call();
+static __attribute__ ((noinline)) void co_yield_noinline();
 static __attribute__ ((noinline)) void co_yield_impl_switch();
 
 #ifdef ENABLE_MULTITHREAD
@@ -43,7 +44,17 @@ Coroutine co_start(Func func, void *arg) {
     coroutine->arg = arg;
     coroutine->stack = (uint8_t*) malloc(sizeof(uint8_t) * stack_size);
     coroutine->stack = &coroutine->stack[stack_size - 1];
-    coroutine->stack_size = stack_size;
+    // 保证地址 16 字节对齐, 防止 movaps 指令引发错误:
+    // 引用: 64-ia-32-architectures-software-developer-vol-1-manual
+    // 10.4.1.1 SSE Data Movement Instructions
+    // The MOVAPS (move aligned packed single-precision floating-point values) instruction transfers a double quadword
+    // operand containing four packed single-precision floating-point values from memory to an XMM register and vice
+    // versa, or between XMM registers. The memory address must be aligned to a 16-byte boundary; otherwise, a
+    // general-protection exception (#GP) is generated.
+    uintptr_t address = (uintptr_t)coroutine->stack;
+    uintptr_t reminder = address % 16;
+    coroutine->stack = (uint8_t *)(address - reminder);
+    coroutine->stack_size = stack_size - reminder;
     coroutine->status = CO_NEW;
     
     Coroutine waiters = current->waiters;
@@ -56,7 +67,7 @@ Coroutine co_start(Func func, void *arg) {
 }
 
 void co_yield() {
-    co_yield_noinlne();
+    co_yield_noinline();
 }
 
 void co_cancel(Coroutine *p_co) {
@@ -109,10 +120,10 @@ size_t co_get_stack_size(Coroutine co) {
 }
 
 
-static __attribute__ ((noinline)) void stack_switch_call(void *csp, Func entry, void* arg) {
+static __attribute__ ((noinline)) void stack_switch_call() {
 #if __x86_64__
-    asm volatile ("movq %0, %%rsp\n" ::"r"((uintptr_t)csp));
-    void *ret = entry(arg);
+    asm volatile ("movq %0, %%rsp\n" ::"r"((uintptr_t)current->stack) : "memory");
+    void *ret = current->entry(current->arg);
     current->ret = ret;
 #else
     asm volatile ("movl %0, %%esp\n" ::"r"((uintptr_t)csp));
@@ -120,12 +131,11 @@ static __attribute__ ((noinline)) void stack_switch_call(void *csp, Func entry, 
     current->ret = ret;
 #endif
     current->status = CO_DEAD;
-    co_yield();
+    co_yield_impl_switch();
 }
 
-static __attribute__ ((noinline)) void co_yield_noinlne() {
-    // 进入等待状态, 注意不要让死人复活(手动狗头)
-    if (current->status != CO_DEAD) current->status = CO_WAITING;
+static __attribute__ ((noinline)) void co_yield_noinline() {
+    current->status = CO_WAITING;
     // save registers
 #if __x86_64__ 
     REGS_SAVE(current->regs, rbx);
@@ -190,7 +200,6 @@ static __attribute__ ((noinline)) void co_yield_impl_switch() {
         REG_LOAD(rcx, current->regs.rip);
         asm volatile ("push %rcx");
         REGS_LOAD(current->regs, rbx);
-        asm volatile ("ret");
 #else
         REGS_LOAD(current->regs, esp);
         REGS_LOAD(current->regs, ebp);
@@ -199,8 +208,8 @@ static __attribute__ ((noinline)) void co_yield_impl_switch() {
         REG_LOAD(ecx, current->regs.eip);
         asm volatile ("push %ecx");
         REGS_LOAD(current->regs, ebx);
-        asm volatile ("ret");
 #endif
+        asm volatile ("ret");
         break;
     default:
         break;
