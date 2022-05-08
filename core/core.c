@@ -11,19 +11,31 @@ static __attribute__ ((noinline)) void co_yield_noinline();
 static __attribute__ ((noinline)) void co_yield_impl_switch();
 
 #ifdef ENABLE_MULTITHREAD
+#if __STDC_VERSION__ >= 201112L
 _Thread_local
+#else
+#error "To enable multithread, you need to enable C11"
+#endif
 #endif
 struct __co * current = NULL;
 
 #ifdef ENABLE_MULTITHREAD
+#if __STDC_VERSION__ >= 201112L
 _Thread_local
+#else
+#error "To enable multithread, you need to enable C11"
+#endif
 #else
 static
 #endif
 uintmax_t   next_cid = 0;
 
 #ifdef ENABLE_MULTITHREAD
+#if __STDC_VERSION__ >= 201112L
 _Thread_local
+#else
+#error "To enable multithread, you need to enable C11"
+#endif
 #else
 static
 #endif
@@ -42,8 +54,7 @@ Coroutine co_start(Func func, void *arg) {
     next_cid++;
     coroutine->entry = func;
     coroutine->arg = arg;
-    coroutine->stack = (uint8_t*) malloc(sizeof(uint8_t) * stack_size);
-    coroutine->stack = &coroutine->stack[stack_size - 1];
+    coroutine->status = CO_NEW;
     // 保证地址 16 字节对齐, 防止 movaps 指令引发错误:
     // 引用: 64-ia-32-architectures-software-developer-vol-1-manual
     // 10.4.1.1 SSE Data Movement Instructions
@@ -51,11 +62,12 @@ Coroutine co_start(Func func, void *arg) {
     // operand containing four packed single-precision floating-point values from memory to an XMM register and vice
     // versa, or between XMM registers. The memory address must be aligned to a 16-byte boundary; otherwise, a
     // general-protection exception (#GP) is generated.
+    coroutine->stack = (uint8_t*) malloc(sizeof(uint8_t) * stack_size);
+    coroutine->stack = &coroutine->stack[stack_size - 1];
     uintptr_t address = (uintptr_t)coroutine->stack;
     uintptr_t reminder = address % 16;
     coroutine->stack = (uint8_t *)(address - reminder);
     coroutine->stack_size = stack_size - reminder;
-    coroutine->status = CO_NEW;
     
     Coroutine waiters = current->waiters;
     current->waiters = coroutine;
@@ -71,8 +83,11 @@ void co_yield() {
 }
 
 void co_cancel(Coroutine *p_co) {
+    if (p_co == NULL) {
+        return;
+    }
     Coroutine co = *p_co;
-    if (co->cid == current->cid) {
+    if (co == NULL || co->cid == current->cid) {
         return ;
     }
     Coroutine worker = current;
@@ -80,7 +95,7 @@ void co_cancel(Coroutine *p_co) {
     while (worker->waiters->cid != co->cid) {
         worker = worker->waiters;
         if (worker->cid == start->cid) {
-            return ;
+            goto CO_CANCEL_SET_NULL;
         }
     }
     // 将当前协程踢出任务队列
@@ -91,6 +106,7 @@ void co_cancel(Coroutine *p_co) {
     free(co->stack);
     // 释放 co
     free(co);
+    CO_CANCEL_SET_NULL:
     // 将已经 wait 的 coroutine 置为 NULL
     *p_co = NULL;
 }
@@ -122,12 +138,12 @@ size_t co_get_stack_size(Coroutine co) {
 
 static __attribute__ ((noinline)) void stack_switch_call() {
 #if __x86_64__
-    asm volatile ("movq %0, %%rsp\n" ::"r"((uintptr_t)current->stack) : "memory");
+    asm volatile ("movq %0, %%rsp\n" ::"r"((uintptr_t)current->stack));
     void *ret = current->entry(current->arg);
     current->ret = ret;
 #else
-    asm volatile ("movl %0, %%esp\n" ::"r"((uintptr_t)csp));
-    void *ret = entry(arg);
+    asm volatile ("movl %0, %%esp\n" ::"r"((uintptr_t)current->stack);
+    void *ret = current->entry(current->arg);
     current->ret = ret;
 #endif
     current->status = CO_DEAD;
@@ -153,24 +169,22 @@ static __attribute__ ((noinline)) void co_yield_noinline() {
     );
 #else
     REGS_SAVE(current->regs, ebx);
+    REGS_SAVE(current->regs, esp);
+    REGS_SAVE(current->regs, ebp);
     REGS_SAVE(current->regs, edi);
     REGS_SAVE(current->regs, esi);
-    REGS_SAVE(current->regs, ebp);
-    REGS_SAVE(current->regs, esp);
     asm volatile (
         "jmp .save_ip_to_stack\n .load_ip_to_regs:\n pop %0" 
         :"=r"(current->regs.eip)
     );
 #endif
     co_yield_impl_switch();
-    asm volatile ("jmp .yeild_return");
+    asm volatile ("jmp .yield_return");
 
     asm volatile (
-        ".save_ip_to_stack:\n call .load_ip_to_regs\n .yeild_return:\n" 
+        ".save_ip_to_stack:\n call .load_ip_to_regs\n .yield_return:\n"
         :   :   :   "memory"
     );
-
-    return ;
 }
 
 static __attribute__ ((noinline)) void co_yield_impl_switch() {
@@ -183,7 +197,7 @@ static __attribute__ ((noinline)) void co_yield_impl_switch() {
     {
     case CO_NEW:
         current->status = CO_RUNNING;
-        stack_switch_call(current->stack, current->entry, current->arg);
+        stack_switch_call();
         break;
     case CO_WAITING:
         current->status = CO_RUNNING;
@@ -209,9 +223,6 @@ static __attribute__ ((noinline)) void co_yield_impl_switch() {
         asm volatile ("push %ecx");
         REGS_LOAD(current->regs, ebx);
 #endif
-        asm volatile ("ret");
-        break;
-    default:
         break;
     }
 }
