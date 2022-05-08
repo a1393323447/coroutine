@@ -223,6 +223,7 @@ static __attribute__ ((noinline)) void co_yield_impl_switch() {
         asm volatile ("push %ecx");
         REGS_LOAD(current->regs, ebx);
 #endif
+        asm volatile("ret");
         break;
     }
 }
